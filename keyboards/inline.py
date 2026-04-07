@@ -9,6 +9,9 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from config import CHANNEL_LINK
 from keyboards.callback_data import (
     AdminAction,
+    AdminAddSlotTime,
+    AdminSlotsDayPick,
+    AdminWorkDayPick,
     BookingAction,
     CalDate,
     SubCheck,
@@ -137,8 +140,20 @@ def admin_main_kb() -> InlineKeyboardMarkup:
     )
     builder.row(
         InlineKeyboardButton(
+            text="📆 Рабочие дни (кнопки на месяц)",
+            callback_data=AdminAction(action="work_days_buttons").pack(),
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
             text="🕒 Добавить слот",
             callback_data=AdminAction(action="add_slot").pack(),
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="⏱ Слоты 30 минут (кнопки)",
+            callback_data=AdminAction(action="slots_buttons").pack(),
         )
     )
     builder.row(

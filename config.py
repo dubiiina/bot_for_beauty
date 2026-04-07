@@ -36,3 +36,11 @@ BOOKING_DAYS_AHEAD: int = 30
 
 # Часовой пояс для расчёта напоминаний (имя из базы tzdata, напр. Europe/Moscow)
 TIMEZONE: str = os.getenv("TIMEZONE", "Europe/Moscow")
+
+# --- Админ: быстрые слоты кнопками ---
+# Диапазон времени для генерации кнопок слотов (включительно по началу, исключая конец)
+ADMIN_SLOTS_START: str = os.getenv("ADMIN_SLOTS_START", "10:00")
+ADMIN_SLOTS_END: str = os.getenv("ADMIN_SLOTS_END", "20:00")
+
+# Шаг времени в минутах для генерации слотов
+SLOT_STEP_MINUTES: int = _get_int("SLOT_STEP_MINUTES", 30)

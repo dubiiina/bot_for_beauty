@@ -38,3 +38,21 @@ class AdminDayForBookings(CallbackData, prefix="adbd"):
 
 class AdminCancelBookingId(CallbackData, prefix="adbc"):
     booking_id: int
+
+
+class AdminWorkDayPick(CallbackData, prefix="awdp"):
+    """Кнопки добавления рабочего дня."""
+    d: str
+
+
+class AdminSlotsDayPick(CallbackData, prefix="asdp"):
+    """Выбор даты для добавления слотов кнопками."""
+    d: str
+    mode: str  # add | del
+
+
+class AdminAddSlotTime(CallbackData, prefix="aast"):
+    """Добавить/удалить слот на выбранную дату."""
+    d: str
+    t: str  # HH-MM (без двоеточия, чтобы pack() не падал)
+    mode: str  # add | del

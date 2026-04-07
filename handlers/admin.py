@@ -14,14 +14,17 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from config import ADMIN_ID, BOOKING_DAYS_AHEAD
+from config import ADMIN_ID, ADMIN_SLOTS_END, ADMIN_SLOTS_START, BOOKING_DAYS_AHEAD, SLOT_STEP_MINUTES
 from database.db import Database, date_range_today_month, to_iso
 from keyboards.callback_data import (
     AdminAction,
+    AdminAddSlotTime,
     AdminCancelBookingId,
     AdminDayForBookings,
     AdminDayForSlots,
     AdminDelSlotId,
+    AdminSlotsDayPick,
+    AdminWorkDayPick,
 )
 from keyboards.inline import admin_main_kb
 from states.admin import AdminStates
@@ -32,6 +35,48 @@ router = Router(name="admin")
 
 admin_only_msg = F.from_user.id == ADMIN_ID
 admin_only_cb = F.from_user.id == ADMIN_ID
+
+
+def _human_date_short(iso_date: str) -> str:
+    # YYYY-MM-DD -> 15.04
+    try:
+        y, m, d = iso_date.split("-")
+        return f"{d}.{m}"
+    except Exception:
+        return iso_date
+
+
+def _month_ahead_dates() -> list[str]:
+    today, end = date_range_today_month(BOOKING_DAYS_AHEAD)
+    out: list[str] = []
+    d = today
+    while d <= end:
+        out.append(to_iso(d))
+        d += timedelta(days=1)
+    return out
+
+
+def _iter_times_30min(start_hhmm: str, end_hhmm: str, step_min: int) -> list[str]:
+    # генерирует времена [start, end) с шагом step_min
+    from datetime import datetime as _dt, timedelta as _td
+
+    base = "2000-01-01"
+    s = _dt.fromisoformat(f"{base}T{start_hhmm}:00")
+    e = _dt.fromisoformat(f"{base}T{end_hhmm}:00")
+    out: list[str] = []
+    cur = s
+    while cur < e:
+        out.append(cur.strftime("%H:%M"))
+        cur += _td(minutes=step_min)
+    return out
+
+
+def _pack_time_for_cb(hhmm: str) -> str:
+    return hhmm.replace(":", "-")
+
+
+def _unpack_time_from_cb(hhmm: str) -> str:
+    return hhmm.replace("-", ":")
 
 
 @router.message(F.text == "⚙️ Админка", admin_only_msg)
@@ -52,6 +97,240 @@ async def admin_exit_cb(cq: CallbackQuery, state: FSMContext) -> None:
     except Exception:
         pass
     await cq.message.answer("Вы вышли из админки.")  # type: ignore[union-attr]
+    await cq.answer()
+
+
+# --- Быстро: рабочие дни кнопками ---
+@router.callback_query(
+    AdminAction.filter(F.action == "work_days_buttons"),
+    StateFilter(AdminStates.menu),
+    admin_only_cb,
+)
+async def admin_work_days_buttons(cq: CallbackQuery, db: Database) -> None:
+    dates = _month_ahead_dates()
+    # одним запросом получаем рабочие дни в диапазоне
+    work_days = set(await db.list_work_days(dates[0], dates[-1]))
+
+    builder = InlineKeyboardBuilder()
+    row: list[InlineKeyboardButton] = []
+    for d in dates:
+        exists = d in work_days
+        txt = f"{_human_date_short(d)}{' ✅' if exists else ''}"
+        row.append(
+            InlineKeyboardButton(text=txt, callback_data=AdminWorkDayPick(d=d).pack())
+        )
+        if len(row) >= 7:
+            builder.row(*row)
+            row = []
+    if row:
+        builder.row(*row)
+    builder.row(
+        InlineKeyboardButton(
+            text="« Назад", callback_data=AdminAction(action="back_admin").pack()
+        )
+    )
+    await cq.message.answer(  # type: ignore[union-attr]
+        "<b>Рабочие дни</b>\nНажимайте даты, чтобы добавить как рабочие (✅ — уже добавлено).",
+        parse_mode=ParseMode.HTML,
+        reply_markup=builder.as_markup(),
+    )
+    await cq.answer()
+
+
+@router.callback_query(AdminWorkDayPick.filter(), admin_only_cb)
+async def admin_work_day_add_cb(cq: CallbackQuery, callback_data: AdminWorkDayPick, db: Database) -> None:
+    d = callback_data.d
+    ok = await db.add_work_day(d)
+    await cq.answer("Добавлено ✅" if ok else "Уже было", show_alert=False)
+    # перерисовка клавиатуры
+    msg = cq.message
+    if msg is None:
+        return
+    dates = _month_ahead_dates()
+    work_days = set(await db.list_work_days(dates[0], dates[-1]))
+    builder = InlineKeyboardBuilder()
+    row: list[InlineKeyboardButton] = []
+    for dd in dates:
+        exists = dd in work_days
+        txt = f"{_human_date_short(dd)}{' ✅' if exists else ''}"
+        row.append(
+            InlineKeyboardButton(text=txt, callback_data=AdminWorkDayPick(d=dd).pack())
+        )
+        if len(row) >= 7:
+            builder.row(*row)
+            row = []
+    if row:
+        builder.row(*row)
+    builder.row(
+        InlineKeyboardButton(
+            text="« Назад", callback_data=AdminAction(action="back_admin").pack()
+        )
+    )
+    await msg.edit_reply_markup(reply_markup=builder.as_markup())
+
+
+# --- Быстро: слоты 30 минут кнопками ---
+@router.callback_query(
+    AdminAction.filter(F.action == "slots_buttons"),
+    StateFilter(AdminStates.menu),
+    admin_only_cb,
+)
+async def admin_slots_buttons_pick_date(cq: CallbackQuery) -> None:
+    dates = _month_ahead_dates()
+    builder = InlineKeyboardBuilder()
+    row: list[InlineKeyboardButton] = []
+    for d in dates:
+        row.append(
+            InlineKeyboardButton(
+                text=_human_date_short(d),
+                callback_data=AdminSlotsDayPick(d=d, mode="add").pack(),
+            )
+        )
+        if len(row) >= 7:
+            builder.row(*row)
+            row = []
+    if row:
+        builder.row(*row)
+    builder.row(InlineKeyboardButton(text="« Назад", callback_data=AdminAction(action="back_admin").pack()))
+    await cq.message.answer(  # type: ignore[union-attr]
+        "<b>Слоты (шаг 30 минут)</b>\nВыберите дату:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=builder.as_markup(),
+    )
+    await cq.answer()
+
+
+@router.callback_query(AdminSlotsDayPick.filter(), admin_only_cb)
+async def admin_slots_buttons_pick_time(
+    cq: CallbackQuery, callback_data: AdminSlotsDayPick, db: Database
+) -> None:
+    d = callback_data.d
+    mode = callback_data.mode or "add"
+    # Показываем времена с отметками, что уже есть
+    times = _iter_times_30min(ADMIN_SLOTS_START, ADMIN_SLOTS_END, SLOT_STEP_MINUTES or 30)
+    existing = await db.list_slots_for_date(d)
+    existing_map = {t: free for _sid, t, free in existing}
+
+    builder = InlineKeyboardBuilder()
+    # переключатель режима
+    mode_label = "➕ Режим: добавление" if mode == "add" else "🗑 Режим: удаление"
+    toggle_to = "del" if mode == "add" else "add"
+    builder.row(
+        InlineKeyboardButton(
+            text=mode_label,
+            callback_data=AdminSlotsDayPick(d=d, mode=toggle_to).pack(),
+        )
+    )
+
+    row: list[InlineKeyboardButton] = []
+    for t in times:
+        if t in existing_map:
+            txt = f"{t} {'✅' if existing_map[t] else '🔒'}"
+        else:
+            txt = t
+        row.append(
+            InlineKeyboardButton(
+                text=txt,
+                callback_data=AdminAddSlotTime(d=d, t=_pack_time_for_cb(t), mode=mode).pack(),
+            )
+        )
+        if len(row) >= 4:
+            builder.row(*row)
+            row = []
+    if row:
+        builder.row(*row)
+    builder.row(InlineKeyboardButton(text="« К датам", callback_data=AdminAction(action="slots_buttons").pack()))
+    await cq.message.answer(  # type: ignore[union-attr]
+        f"<b>Слоты на {escape(d)}</b>\n"
+        "Нажмите время, чтобы <b>добавить</b> или <b>удалить</b> слот.\n"
+        "✅ — слот существует и свободен, 🔒 — слот занят.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=builder.as_markup(),
+    )
+    await cq.answer()
+
+
+@router.callback_query(AdminAddSlotTime.filter(), admin_only_cb)
+async def admin_add_slot_time_cb(
+    cq: CallbackQuery, callback_data: AdminAddSlotTime, db: Database
+) -> None:
+    d = callback_data.d
+    t = _unpack_time_from_cb(callback_data.t)
+    mode = callback_data.mode or "add"
+    # Для удобства: если день ещё не рабочий — добавим автоматически
+    await db.add_work_day(d)
+
+    if mode == "del":
+        # удаляем только если слот существует и свободен
+        slots = await db.list_slots_for_date(d)
+        slot_id = None
+        is_free = False
+        for sid, tt, free in slots:
+            if tt == t:
+                slot_id = sid
+                is_free = free
+                break
+        if slot_id is None:
+            await cq.answer("Слота нет", show_alert=False)
+        elif not is_free:
+            await cq.answer("Слот занят — удаление запрещено", show_alert=True)
+        else:
+            ok, err = await db.delete_slot(int(slot_id))
+            await cq.answer("Удалено ✅" if ok else (err or "Не удалось"), show_alert=not ok)
+    else:
+        ok, err = await db.add_slot(d, t)
+        await cq.answer("Слот добавлен ✅" if ok else (err or "Не удалось"), show_alert=not ok)
+
+    # перерисовка клавиатуры этого же окна
+    msg = cq.message
+    if msg is None:
+        return
+    times = _iter_times_30min(ADMIN_SLOTS_START, ADMIN_SLOTS_END, SLOT_STEP_MINUTES or 30)
+    existing = await db.list_slots_for_date(d)
+    existing_map = {tt: free for _sid, tt, free in existing}
+
+    builder = InlineKeyboardBuilder()
+    mode_label = "➕ Режим: добавление" if mode == "add" else "🗑 Режим: удаление"
+    toggle_to = "del" if mode == "add" else "add"
+    builder.row(
+        InlineKeyboardButton(
+            text=mode_label,
+            callback_data=AdminSlotsDayPick(d=d, mode=toggle_to).pack(),
+        )
+    )
+    row: list[InlineKeyboardButton] = []
+    for tt in times:
+        if tt in existing_map:
+            txt = f"{tt} {'✅' if existing_map[tt] else '🔒'}"
+        else:
+            txt = tt
+        row.append(
+            InlineKeyboardButton(
+                text=txt,
+                callback_data=AdminAddSlotTime(d=d, t=_pack_time_for_cb(tt), mode=mode).pack(),
+            )
+        )
+        if len(row) >= 4:
+            builder.row(*row)
+            row = []
+    if row:
+        builder.row(*row)
+    builder.row(
+        InlineKeyboardButton(
+            text="« К датам", callback_data=AdminAction(action="slots_buttons").pack()
+        )
+    )
+    await msg.edit_reply_markup(reply_markup=builder.as_markup())
+
+
+@router.callback_query(AdminAction.filter(F.action == "back_admin"), admin_only_cb)
+async def admin_back_to_menu(cq: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminStates.menu)
+    await cq.message.answer(  # type: ignore[union-attr]
+        "<b>Админ-панель</b>\nВыберите действие:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=admin_main_kb(),
+    )
     await cq.answer()
 
 

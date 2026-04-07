@@ -14,10 +14,10 @@ python -m venv .venv
 ```powershell
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-copy .env.example .env
+copy env.example .env
 ```
 
-Отредактируйте `.env`: укажите `BOT_TOKEN`, `ADMIN_ID`, `CHANNEL_ID`, `CHANNEL_LINK`, при необходимости `TIMEZONE`.
+Отредактируйте `.env`: укажите `BOT_TOKEN`, `ADMIN_ID`, `CHANNEL_ID`, `CHANNEL_LINK`, при необходимости `TIMEZONE` и параметры слотов админа.
 
 ## Запуск
 

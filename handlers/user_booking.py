@@ -23,7 +23,7 @@ from keyboards import (
 )
 from keyboards.callback_data import BookingAction, CalDate, SubCheck, TimeSlot
 from states.booking import BookingStates
-from utils.notify import notify_admin_new_booking
+from utils.notify import notify_admin_new_booking, post_channel_schedule
 from utils.reminders import cancel_reminder_job, schedule_booking_reminder
 from utils.subscription import is_user_subscribed
 
@@ -271,6 +271,13 @@ async def confirm_booking_cb(
         date_str=data["slot_date"],
         time_str=data["slot_time"],
         user_id=uid,
+    )
+    await post_channel_schedule(
+        bot,
+        db,
+        date_str=data["slot_date"],
+        highlight_name=data["client_name"],
+        highlight_time=data["slot_time"],
     )
 
     await state.clear()

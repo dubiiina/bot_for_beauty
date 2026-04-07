@@ -1,0 +1,14 @@
+# Telegram bot (aiogram 3.x)
+aiogram>=3.13,<4
+
+# Планировщик напоминаний
+APScheduler>=3.10,<4
+
+# Асинхронный SQLite
+aiosqlite>=0.20,<1
+
+# Загрузка переменных окружения (опционально, удобно для .env)
+python-dotenv>=1.0,<2
+
+# Часовые зоны на Windows (для zoneinfo)
+tzdata>=2024.1
